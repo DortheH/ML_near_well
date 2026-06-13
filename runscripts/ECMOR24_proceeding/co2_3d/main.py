@@ -81,7 +81,7 @@ ANGLE: float = math.pi / 3
 
 # 
 # # Run ensemble and extract data.
-if True:
+if False:
     print("=== BEFORE full_ensemble ===", flush=True)
     extracted_data: np.ndarray = full_ensemble(
         runspecs_ensemble,
@@ -140,42 +140,7 @@ if True:
     restructure_data(data_dir, data_stencil_dir, trainspecs, stencil_size=3)
     print("=== STAGE: restructure_data DONE ===", flush=True)
 
-# Plot some WIs.
-if False:
-    features, targets = reload_data(
-        runspecs_ensemble,
-        trainspecs,
-        data_stencil_dir,
-        # A lot of the outer cells got disregarded during upscaling, because the
-        # saturation could not be fully upscaled. -> Only 11 x values.
-        num_xvalues=10,
-        step_size_t=1,
-    )
-    for i in range(0, features.shape[0], 20):
-        # Plot data WI vs radius.
-        plot_member(
-            features,
-            targets,
-            i,
-            data_stencil_dir / f"member_{i}_WI_vs_radius",
-            comparison_param="layer",
-            fixed_param_index=10,  # Plot for time step 10.
-            radius_index=FEATURE_TO_INDEX["radius"],
-            y_param="WI_log",
-        )
-        # Plot data WI vs time.
-        plot_member(
-            features,
-            targets,
-            i,
-            data_stencil_dir / f"member_{i}_WI_vs_time",
-            x_param="time",
-            comparison_param="layer",
-            final_time=runspecs_ensemble["constants"]["INJECTION_TIME"],
-            fixed_param_index=3,  # Plot for radius 3.
-            radius_index=FEATURE_TO_INDEX["radius"],
-            y_param="WI_log",
-        )
+
 
 print("\n=== STAGE: tune_and_train START ===", flush=True)
 
@@ -186,19 +151,12 @@ callbacks = [
     CSVLogger(str(history_csv), append=False),
     EarlyStopping(
         monitor="val_loss",
-        patience=30,
-        restore_best_weights=True,
-        verbose=1,
-    ),
-    ReduceLROnPlateau(
-        monitor="val_loss",
-        factor=0.5,
-        patience=15,
+        patience=40,
         min_delta=1e-6,
-        min_lr=1e-6,
         verbose=1,
     ),
 ]
+
 # Tune and train model.
 if True:
     original_fit = keras.Model.fit
@@ -221,10 +179,12 @@ if True:
                 data_stencil_dir,
                 nn_dir,
                 max_trials=10,
-                lr=2e-3,
-                lr_tune=1e-4,
-                epochs=1000,
+                lr=1e-3,
+                lr_tune=1e-3,
+                epochs=500,
                 bs=512,
+                patience=40,
+                lr_patience=15,
                 executions_per_trial=1,
             )
     finally:
@@ -233,57 +193,7 @@ if True:
     print(f"training_history exists: {history_csv.exists()}", flush=True)
     print(f"training_history path: {history_csv}", flush=True)
 print("=== STAGE: tune_and_train DONE ===", flush=True)
-# Do some plotting of results and sensitivity analysis.
-if False:
-    model: keras.Model = keras.models.load_model(nn_dir / "bestmodel.keras")  # type: ignore
-    features, targets = reload_data(
-        runspecs_ensemble,
-        trainspecs,
-        data_stencil_dir,
-        # A lot of the outer cells got disregarded during upscaling, because the
-        # saturation could not be fully upscaled. -> Only 11 x values.
-        num_xvalues=10,
-        step_size_t=1,
-    )
-    for i in range(0, features.shape[0], 20):
-        # Plot NN WI and data WI vs radius.
-        plot_member(
-            features,
-            targets,
-            i,
-            nn_dir / f"member_{i}_WI_vs_radius",
-            comparison_param="layer",
-            fixed_param_index=10,  # Plot for time step 10.
-            radius_index=FEATURE_TO_INDEX["radius"],
-            model=model,
-            nn_dirname=nn_dir,
-            trainspecs=trainspecs,
-            y_param="WI_log",
-        )
-        # Plot NN WI and data WI vs time.
-        plot_member(
-            features,
-            targets,
-            i,
-            nn_dir / f"member_{i}_WI_vs_time",
-            x_param="time",
-            comparison_param="layer",
-            final_time=runspecs_ensemble["constants"]["INJECTION_TIME"],
-            fixed_param_index=3,  # Plot for radius 3.
-            radius_index=FEATURE_TO_INDEX["radius"],
-            model=model,
-            nn_dirname=nn_dir,
-            trainspecs=trainspecs,
-            y_param="WI_log",
-        )
-    outputs, inputs = analysis.sensitivity_analysis(model)
-    analysis.plot_analysis(
-        outputs,
-        inputs,
-        nn_dir / "sensitivity_analysis",
-        feature_names=trainspecs["features"],
-        legend=False,
-    )
+
 
 # Integrate into OPM.
 if False:
@@ -313,71 +223,4 @@ if False:
             integration_dir,
             dirname / "integration.mako",
         )
-        
-# Plot results.
-if False:
-    from ecl.summary import EclSum
-
-    print("\n=== STAGE: plot_results START ===", flush=True)
-
-    for savedir_3d in [
-        integration_3d_dir_1,
-        integration_3d_dir_2,
-        integration_3d_dir_3,
-        integration_3d_dir_4,
-    ]:
-        print(f"\n--- Plotting {savedir_3d} ---", flush=True)
-
-        labels = [
-            "Fine-scale benchmark",
-            "90x90m Peaceman",
-            "52x52m Peaceman",
-            "27x27m Peaceman",
-        ]
-
-        summary_files = [
-            savedir_3d / "run_0" / "output" / "8X8M_PEACEMAN_MORE_ZCELLS.SMSPEC",
-            savedir_3d / "run_1" / "output" / "90X90M_PEACEMAN.SMSPEC",
-            savedir_3d / "run_2" / "output" / "52X52M_PEACEMAN.SMSPEC",
-            savedir_3d / "run_3" / "output" / "27X27M_PEACEMAN.SMSPEC",
-        ]
-
-        fig, ax = plt.subplots()
-
-        for summary_file, label in zip(summary_files, labels):
-            print(f"Reading {summary_file}", flush=True)
-
-            summary = EclSum(str(summary_file))
-
-            time = np.array(summary.get_values("TIME", report_only=True))
-            bhp = np.array(summary.get_values("WBHP:INJ0", report_only=True))
-
-            print(
-                f"{label}: TIME={time.shape}, WBHP={bhp.shape}",
-                flush=True,
-            )
-
-            linewidth = 1.5 if label.startswith("Fine-scale") else 3.0
-            linestyle = "solid" if label.startswith("Fine-scale") else "dotted"
-
-            ax.plot(
-                time,
-                bhp,
-                label=label,
-                linestyle=linestyle,
-                linewidth=linewidth,
-            )
-
-        ax.set_xlabel("Time since injection start (days)")
-        ax.set_ylabel("Bottom hole pressure")
-        ax.legend()
-
-        fig.tight_layout()
-
-        outpath = savedir_3d / "bhp.svg"
-        print(f"Saving {outpath}", flush=True)
-
-        fig.savefig(outpath)
-        plt.close(fig)
-
-    print("\n=== STAGE: plot_results DONE ===", flush=True)
+   
